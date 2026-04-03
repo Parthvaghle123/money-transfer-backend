@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const Customer = require("../models/Customer");
 const Company = require("../models/Company");
+const Transaction = require("../models/Transaction");
 const { auth, checkPermission } = require("../middleware/auth");
 const RoleAssignment = require("../models/RoleAssignment");
 
@@ -78,6 +79,12 @@ router.post("/", auth, checkPermission('customer_add'), async (req, res) => {
     if (!company_id || company_id === "undefined" || company_id === "null") {
       return res.status(400).json({ message: "Company ID is required" });
     }
+
+    // Validate mobile_number - must be exactly 10 digits
+    if (!mobile_number || !/^\d{10}$/.test(mobile_number.replace(/\D/g, ''))) {
+      return res.status(400).json({ message: "Mobile number must be exactly 10 digits" });
+    }
+
     // Check permission manually for company_id
     const isOwner = await Company.findOne({ _id: company_id, userId: req.user.id || req.user._id });
     const assignment = await RoleAssignment.findOne({ 
@@ -98,7 +105,7 @@ router.post("/", auth, checkPermission('customer_add'), async (req, res) => {
     const newCustomer = new Customer({
       company_id,
       customer_name,
-      mobile_number,
+      mobile_number: mobile_number.replace(/\D/g, ''),
       customer_email,
       customer_address,
       bank_name: accounts[0]?.bank_name || bank_name,
@@ -126,6 +133,11 @@ router.put("/:id", auth, checkPermission('customer_edit'), async (req, res) => {
     let customer = await Customer.findById(req.params.id).populate("company_id");
     if (!customer) return res.status(404).json({ message: "Customer not found" });
 
+    // Validate mobile_number if provided - must be exactly 10 digits
+    if (mobile_number && !/^\d{10}$/.test(mobile_number.replace(/\D/g, ''))) {
+      return res.status(400).json({ message: "Mobile number must be exactly 10 digits" });
+    }
+
     // Check permission
     const isOwner = customer.company_id.userId.toString() === (req.user.id || req.user._id).toString();
     const assignment = await RoleAssignment.findOne({ 
@@ -140,7 +152,7 @@ router.put("/:id", auth, checkPermission('customer_edit'), async (req, res) => {
 
     const updatedFields = {
       customer_name,
-      mobile_number,
+      mobile_number: mobile_number ? mobile_number.replace(/\D/g, '') : mobile_number,
       customer_email,
       customer_address,
       bank_accounts,
@@ -161,7 +173,7 @@ router.put("/:id", auth, checkPermission('customer_edit'), async (req, res) => {
 });
 
 // @route   DELETE api/customer/:id
-// @desc    Delete a customer
+// @desc    Delete a customer with cascade delete for related transactions
 router.delete("/:id", auth, checkPermission('customer_delete'), async (req, res) => {
   try {
     const customer = await Customer.findById(req.params.id).populate("company_id");
@@ -179,10 +191,19 @@ router.delete("/:id", auth, checkPermission('customer_delete'), async (req, res)
       return res.status(401).json({ message: "Not authorized" });
     }
 
+    // First, delete all related transactions
+    const deleteResult = await Transaction.deleteMany({ customer_id: req.params.id });
+    console.log(`Deleted ${deleteResult.deletedCount} transactions for customer ${req.params.id}`);
+
+    // Then delete the customer
     await Customer.findByIdAndDelete(req.params.id);
-    res.json({ message: "Customer removed" });
+    
+    res.json({ 
+      message: "Customer and all related transactions removed successfully",
+      deletedTransactions: deleteResult.deletedCount
+    });
   } catch (err) {
-    console.error(err.message);
+    console.error("DELETE customer ERROR:", err);
     res.status(500).json({ message: "Server Error" });
   }
 });

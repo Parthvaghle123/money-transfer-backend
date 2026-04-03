@@ -154,41 +154,79 @@ router.get("/history/:companyId", auth, async (req, res) => {
     let query = { companyId };
 
     /**
-     * Enforce allowed history type by role:
+     * Enforce allowed history type by role and permissions:
      * - `super-admin`: see ALL history (DEPOSIT + WITHDRAW)
-     * - `user`: see ONLY DEPOSIT history
-     * - `staff`: see ONLY WITHDRAW history
+     * - Check permissions for role-based users:
+     *   - If has `transfer_money` permission: can see DEPOSIT
+     *   - If has `denomination_withdraw` permission: can see WITHDRAW
+     *   - If has both permissions: can see both
+     * - Legacy role fallback:
+     *   - `user`: see ONLY DEPOSIT history
+     *   - `staff`: see ONLY WITHDRAW history
      *
      * NOTE: the UI currently doesn't pass `?type=...`, but we still guard it.
      */
     const role = req.user?.role;
-    if (role === "staff") {
-      // Staff should see withdraw-only history.
-      if (type && type !== "WITHDRAW") {
-        return res.status(403).json({ message: "Access denied. Allowed history type: WITHDRAW" });
+    
+    // Check user's permissions for this company
+    let userPermissions = [];
+    if (role !== "super-admin") {
+      try {
+        const assignment = await RoleAssignment.findOne({ 
+          email: req.user.email, 
+          company_id: companyId 
+        });
+        userPermissions = assignment?.permissions || [];
+      } catch (err) {
+        console.error("Error fetching permissions:", err);
+        userPermissions = [];
       }
-      query.type = "WITHDRAW";
-    } else if (role === "user") {
-      // User should see deposit-only history.
-      if (type && type !== "DEPOSIT") {
-        return res.status(403).json({ message: "Access denied. Allowed history type: DEPOSIT" });
-      }
-      query.type = "DEPOSIT";
-    } else if (role === "super-admin") {
-      // Super-admin can see both: by default return all; optionally allow ?type=...
-      if (type) {
-        if (type !== "DEPOSIT" && type !== "WITHDRAW") {
-          return res.status(400).json({ message: "Invalid history type. Use DEPOSIT or WITHDRAW." });
-        }
-        query.type = type;
-      }
-    } else {
-      // Fail closed: unknown roles only get deposit history.
-      if (type && type !== "DEPOSIT") {
-        return res.status(403).json({ message: "Access denied. Allowed history type: DEPOSIT" });
-      }
-      query.type = "DEPOSIT";
     }
+    
+    const hasMoneyPermission = userPermissions.includes('transfer_money');
+    const hasWithdrawPermission = userPermissions.includes('denomination_withdraw');
+    
+    // Determine what types to show based on permissions
+    let allowedTypes = [];
+    
+    if (role === "super-admin") {
+      // Super-admin can see both
+      allowedTypes = ['DEPOSIT', 'WITHDRAW'];
+    } else if (hasMoneyPermission && hasWithdrawPermission) {
+      // User has both permissions
+      allowedTypes = ['DEPOSIT', 'WITHDRAW'];
+    } else if (hasMoneyPermission) {
+      // User has only money permission
+      allowedTypes = ['DEPOSIT'];
+    } else if (hasWithdrawPermission) {
+      // User has only withdraw permission
+      allowedTypes = ['WITHDRAW'];
+    } else {
+      // Fallback to legacy role-based behavior
+      if (role === "staff") {
+        allowedTypes = ['WITHDRAW'];
+      } else if (role === "user") {
+        allowedTypes = ['DEPOSIT'];
+      } else {
+        // Fail closed: unknown roles only get deposit history.
+        allowedTypes = ['DEPOSIT'];
+      }
+    }
+    
+    // Apply type filtering
+    if (type) {
+      if (type !== "DEPOSIT" && type !== "WITHDRAW") {
+        return res.status(400).json({ message: "Invalid history type. Use DEPOSIT or WITHDRAW." });
+      }
+      if (!allowedTypes.includes(type)) {
+        return res.status(403).json({ message: `Access denied. Allowed history types: ${allowedTypes.join(', ')}` });
+      }
+      query.type = type;
+    } else if (allowedTypes.length === 1) {
+      // If only one type is allowed, filter by it
+      query.type = allowedTypes[0];
+    }
+    // If both types are allowed, don't filter (return all)
 
     const history = await DenominationHistory.find(query).sort({ date: -1 });
     res.json({ history });

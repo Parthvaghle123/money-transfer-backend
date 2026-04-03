@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
+const { auth } = require("../middleware/auth");
 
 const SECRET_KEY = process.env.SECRET_KEY || "MY_SUPER_SECRET_KEY";
 
@@ -149,6 +150,92 @@ router.post("/register", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Something went wrong", error: err.message });
+  }
+});
+
+// --------------------- Get Profile ---------------------
+// @route   GET api/user/profile
+// @desc    Get authenticated user's profile details
+router.get("/profile", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(403).json({ message: "Profile not available for this user" });
+
+    return res.json({
+      success: true,
+      profile: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phoneNumber: user.phoneNumber || "",
+        locationDetails: user.fullAddress || "",
+        city: user.city || "",
+        state: user.state || "",
+        pincode: user.pincode || "",
+        memberSince: user.created_at || user.createdAt || null,
+      },
+    });
+  } catch (err) {
+    console.error("GET /api/user/profile ERROR:", err);
+    return res.status(500).json({ message: "Server Error" });
+  }
+});
+
+// --------------------- Update Profile ---------------------
+// @route   PUT api/user/profile
+// @desc    Update authenticated user's profile details (password optional)
+router.put("/profile", auth, async (req, res) => {
+  try {
+    const { firstName, lastName, email, phoneNumber, locationDetails, password, city, state, pincode } = req.body;
+
+    if (!firstName || !lastName || !email || !phoneNumber || !locationDetails || !city || !state || !pincode) {
+      return res.status(400).json({ message: "First name, last name, email, phone number, location details, city, state, and pincode are required" });
+    }
+
+    const hasPassword = typeof password === "string" && password.trim().length > 0;
+    if (hasPassword && password.length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    }
+
+    const normalizedEmail = String(email).toLowerCase();
+    const normalizedPhone = String(phoneNumber).replace(/\D/g, "");
+
+    if (!/^\d{10}$/.test(normalizedPhone)) {
+      return res.status(400).json({ message: "Phone number must be exactly 10 digits" });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(403).json({ message: "Profile not available for this user" });
+
+    // If email changed, enforce uniqueness
+    if (normalizedEmail !== user.email) {
+      const existingUser = await User.findOne({ email: normalizedEmail });
+      if (existingUser) return res.status(400).json({ message: "Email is already in use" });
+    }
+
+    user.firstName = firstName;
+    user.lastName = lastName;
+    user.email = normalizedEmail;
+    user.phoneNumber = normalizedPhone;
+    user.fullAddress = locationDetails;
+    user.city = city;
+    user.state = state;
+    user.pincode = pincode;
+    if (hasPassword) user.password = password;
+
+    await user.save();
+
+    return res.json({
+      success: true,
+      user: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+      },
+    });
+  } catch (err) {
+    console.error("PUT /api/user/profile ERROR:", err);
+    return res.status(500).json({ message: "Server Error" });
   }
 });
 

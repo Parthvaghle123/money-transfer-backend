@@ -43,6 +43,12 @@ const customerSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+      validate: {
+        validator: function(v) {
+          return /^\d{10}$/.test(v);
+        },
+        message: 'Mobile number must be exactly 10 digits'
+      }
     },
     customer_email: {
       type: String,

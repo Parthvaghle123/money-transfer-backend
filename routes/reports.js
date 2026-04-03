@@ -287,13 +287,21 @@ router.get("/company", auth, async (req, res) => {
 // @desc    Bank-wise Report
 router.get("/bank", auth, async (req, res) => {
   try {
-    const { startDate, endDate, bankName } = req.query;
+    const { startDate, endDate, bankName, companyId } = req.query;
     
     const allCompanyIds = await getAllowedCompanyIds(req.user);
 
-    // Get all unique bank accounts for user's companies
+    let companyScope = { $in: allCompanyIds };
+    if (companyId && companyId !== "undefined" && companyId !== "null") {
+      if (!allCompanyIds.includes(companyId.toString())) {
+        return res.status(403).json({ message: "Access denied to this company's report" });
+      }
+      companyScope = companyId;
+    }
+
+    // Get all unique bank accounts for user's companies (optionally scoped to one company)
     const bankAccounts = await BankAccount.find({ 
-      company_id: { $in: allCompanyIds },
+      company_id: companyScope,
       ...(bankName ? { bank_name: bankName } : {})
     }).populate("company_id", "name");
 

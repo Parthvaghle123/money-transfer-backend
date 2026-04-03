@@ -4,6 +4,32 @@ const RoleAssignment = require("../models/RoleAssignment");
 const User = require("../models/User");
 const { auth, superAdmin } = require("../middleware/auth");
 
+/**
+ * transfer_money → customer_detail + add/edit/delete.
+ * denomination_withdraw only (no transfer_money) → customer_detail only.
+ * If both, transfer_money wins (full customer).
+ */
+function normalizeMoneyTransferCustomerPerms(permissions) {
+  if (!Array.isArray(permissions)) return permissions;
+  const hasMoney = permissions.includes("transfer_money");
+  const hasWithdraw = permissions.includes("denomination_withdraw");
+
+  if (hasMoney) {
+    const full = ["customer_detail", "customer_add", "customer_edit", "customer_delete"];
+    return [...new Set([...permissions, ...full])];
+  }
+
+  if (hasWithdraw) {
+    const stripped = permissions.filter(
+      (p) => p !== "customer_add" && p !== "customer_edit" && p !== "customer_delete"
+    );
+    if (!stripped.includes("customer_detail")) stripped.push("customer_detail");
+    return stripped;
+  }
+
+  return [...permissions];
+}
+
 // @route   GET api/role-assignment/company/:companyId
 // @desc    Get all role assignments for a company
 router.get("/company/:companyId", auth, async (req, res) => {
@@ -38,7 +64,7 @@ router.post("/", auth, superAdmin, async (req, res) => {
       email: email.toLowerCase(),
       password,
       role,
-      permissions,
+      permissions: normalizeMoneyTransferCustomerPerms(permissions),
       company_id
     });
 
@@ -76,7 +102,7 @@ router.put("/:id", auth, superAdmin, async (req, res) => {
     assignment.email = email.toLowerCase();
     if (password) assignment.password = password; // Only update if password provided
     assignment.role = role;
-    assignment.permissions = permissions;
+    assignment.permissions = normalizeMoneyTransferCustomerPerms(permissions);
 
     await assignment.save();
     res.json(assignment);
